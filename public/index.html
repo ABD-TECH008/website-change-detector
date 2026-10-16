@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Watch Party — watch together</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="#"><span class="brand-icon">▶</span> watch<span>party</span></a><span class="top-note">Same screen. Same moment.</span></header>
+  <main>
+    <section id="lobby" class="lobby">
+      <div class="hero"><div class="eyebrow">YOUR PEOPLE. YOUR MOVIE NIGHT.</div><h1>Good movies are<br><span>better together.</span></h1><p>Create a private room, sync playback, react live, and decide what to watch next.</p>
+      <div class="name-row"><label for="displayName">YOUR NAME</label><input id="displayName" maxlength="24" placeholder="e.g. Farhat" value="Guest"></div>
+      <div class="lobby-actions"><button id="createBtn" class="primary">＋ Create a room</button><div class="join-box"><input id="roomCode" maxlength="8" placeholder="ROOM CODE"><button id="joinBtn" class="secondary">Join room →</button></div></div>
+      <small class="hint">Tip: use a direct MP4/WebM video URL for synchronized playback.</small></div>
+      <div class="hero-art"><div class="poster poster-back">TONIGHT<br><b>TOGETHER</b></div><div class="poster poster-front"><div class="poster-play">▶</div><span>YOUR PRIVATE<br>MOVIE CLUB</span></div><div class="art-badge">✦ <b>LIVE</b> with friends</div></div>
+    </section>
+
+    <section id="watchApp" class="watch-app hidden">
+      <div class="room-head"><div><div class="eyebrow">PRIVATE WATCH ROOM</div><h2 id="roomTitle">Movie night</h2><span id="roomMeta" class="muted">Room code: —</span></div><button id="copyInvite" class="secondary">Copy invite code</button></div>
+      <div class="layout">
+        <div class="main-column">
+          <div class="player-card"><div class="player-top"><span class="live-dot"></span><span id="hostStatus">HOST CONTROLS</span><span id="syncStatus" class="sync-label">● Synced</span></div>
+            <div class="video-wrap"><video id="video" controls playsinline></video><div id="videoPlaceholder" class="video-placeholder"><div class="big-play">▶</div><h3>Bring the movie night to life</h3><p>The host can add a direct video link below.</p></div><div id="reactionLayer" class="reaction-layer"></div></div>
+            <div id="hostTools" class="host-tools"><input id="videoTitle" placeholder="Movie / video title"><input id="videoUrl" placeholder="Direct video URL (.mp4, .webm)"><button id="loadVideo" class="primary">Load video</button></div>
+            <div class="player-foot"><span>Playback sync is managed by the room host</span><span id="driftText">Drift correction: ready</span></div>
+          </div>
+          <div class="panel playlist-panel"><div class="panel-heading"><h3>🎬 Watch next</h3><span class="muted">Shared playlist</span></div><div class="add-row"><input id="playlistTitle" placeholder="Video title"><input id="playlistUrl" placeholder="Direct video URL"><button id="addPlaylist" class="secondary">Add</button></div><div id="playlist" class="playlist-empty">Your shared playlist is waiting for its first pick.</div></div>
+          <div class="panel poll-panel"><div class="panel-heading"><h3>🗳️ Group vote</h3><span class="muted">Choose together</span></div><div id="pollArea"><p class="muted">The host can start a quick vote.</p></div><div id="pollCreator" class="poll-creator"><input id="pollQuestion" placeholder="What should we watch?"><div class="poll-options"><input id="pollOption1" placeholder="Option 1"><input id="pollOption2" placeholder="Option 2"></div><div class="poll-options"><input id="pollOption3" placeholder="Option 3 (optional)"><input id="pollOption4" placeholder="Option 4 (optional)"></div><button id="createPoll" class="secondary">Start poll</button></div></div>
+        </div>
+        <aside class="side-column">
+          <div class="panel people-panel"><div class="panel-heading"><h3>👥 In the room</h3><span id="peopleCount" class="count-pill">1</span></div><div id="peopleList"></div></div>
+          <div class="panel reactions-panel"><div class="panel-heading"><h3>✨ Reactions</h3></div><p class="muted small">Send the vibe without pausing the movie.</p><div class="emoji-row"><button data-emoji="😂">😂</button><button data-emoji="😍">😍</button><button data-emoji="👏">👏</button><button data-emoji="😮">😮</button><button data-emoji="🔥">🔥</button><button data-emoji="😭">😭</button><button data-emoji="❤️">❤️</button></div></div>
+          <div class="panel chat-panel"><div class="panel-heading"><h3>💬 Room chat</h3><span class="muted">Live</span></div><div id="chatMessages" class="chat-messages"><div class="system-message">Welcome! Say hi to everyone.</div></div><form id="chatForm" class="chat-form"><input id="chatInput" maxlength="500" placeholder="Send a message…"><button aria-label="Send message">➤</button></form></div>
+        </aside>
+      </div>
+    </section>
+    <div id="toast" class="toast"></div>
+  </main>
+  <footer>Made for movie nights ✦ <span>Watch together, wherever you are.</span></footer>
+  <script src="/socket.io/socket.io.js"></script><script src="/app.js"></script>
+</body></html>
