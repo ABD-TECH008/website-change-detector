@@ -1,46 +1,37 @@
-# Watch Party
+# Website Change Detector
 
-A real-time multi-user watch-party web app built with Node.js, Express and Socket.IO.
+Monitors public web pages in a headless browser (Playwright) and alerts on meaningful changes while ignoring noise.
 
-## Features
-- Create a room or join with a room code; invite friends by sharing the code.
-- Host-controlled playback synchronization for direct MP4/WebM URLs.
-- Late-join state sync and periodic host heartbeat.
-- Drift correction for participants, with visible drift status.
-- Live chat, floating emoji reactions, shared playlist, group polls, and host transfer.
-- Responsive interface for desktop and mobile.
-
-## Requirements
-- Node.js 18 or newer
-- Internet access for npm install and for any externally hosted video URL
+**Live demo:** _add your deployed URL here after deploying (see Deploy)_
 
 ## Run locally
-1. Install Node.js from the official Node.js website if needed.
-2. Extract this project ZIP and open the `watch_party_project` folder in VS Code.
-3. Open Terminal in VS Code and run:
-   ```bash
-   npm install
-   npm start
-   ```
-4. Open `http://localhost:3000`.
-5. Create a room, then share the room code with other users.
+```bash
+npm install && npx playwright install chromium
+npm start        # http://localhost:3000
+```
+Optional env: `BASE_URL` (used in alert links), `TELEGRAM_BOT_TOKEN`, `SMTP_URL` + `MAIL_FROM`, `DATA_DIR`, `PORT`.
 
-## Test with two users
-- Open the app in two browser windows (or one normal and one incognito window).
-- Create a room in the first window and join it from the second with the room code.
-- In the host window, paste a direct `.mp4` or `.webm` URL and click **Load video**.
-- Use the host controls to play, pause, or seek. Try chat, reactions, playlist, voting and host transfer.
+## Deploy (Docker: Render / Railway / Fly.io)
+Create a Web Service from this repo (it uses the included `Dockerfile`), mount a persistent disk at `/app/data`, set `BASE_URL` to the public URL, and paste that URL above.
 
-## Important notes
-- Browsers may require each participant to click Play once before audio/video can play.
-- Use a direct video-file URL that allows cross-origin playback. YouTube watch-page links are not direct media URLs and will not work in the native video player.
-- This is a working student-project prototype. For public deployment, add authentication, rate limiting, persistent storage, HTTPS, room expiry, and stronger input validation.
-- Playback sync is designed for local-network/project-demo use; actual latency depends on the network and video hosting provider.
+## Requirement map
+| # | Where |
+|---|---|
+| 1 URL, name, 15 min–24 h interval, Playwright | `POST /api/watches` (interval clamped), `getBrowser` |
+| 2 Scheduler, queue, timeouts, retries, public only | `tick` (15 s scheduler, 2 workers, 90 s job timeout), 3 goto retries with backoff, failed checks back off exponentially, `safeUrl` blocks private IPs, no credentials stored |
+| 3 Text + screenshot, store only on hash change | `record` |
+| 4 Noise filtering + sensitivity | `NOISE` regexes, ad/banner/carousel/iframe removal, low/medium/high thresholds |
+| 5 Visual picker, watch/ignore regions | click the page preview; `/api/pick` returns a CSS selector |
+| 6 Text diff, screenshot diff, side by side | timeline page (`/api/diff`, `/api/imgdiff`) |
+| 7 Email, Discord/Telegram/generic webhook, summary + diff link, no duplicates | `notify` |
+| 8 Timeline + dashboard (OK / error / blocked) | `public/index.html` |
+| Bonus | per-page RSS: `/api/watches/:id/rss` |
 
-## Suggested demo checklist
-1. Create a room and join from 2+ browsers.
-2. Show synchronized play/pause/seek and the drift readout.
-3. Add a playlist item and have the host play it.
-4. Send a chat message and an emoji reaction.
-5. Create a poll and vote from both browsers.
-6. Transfer host permissions and show that host controls move.
+## Design questions
+1. **Is an outage or CAPTCHA a change?** No. HTTP 403/429 or a short page matching CAPTCHA/bot-wall text sets the status to *blocked*; 4xx/5xx or navigation failure sets *error*. Neither creates a snapshot or an alert.
+2. **200 users, same URL?** Due watches are grouped by URL, so the page is loaded once per cycle and each watch extracts its own regions from that load.
+3. **Pages that differ on every load?** Timestamps, relative times, counters and random tokens are stripped before hashing; ads/banners/carousels are ignored; sensitivity sets a minimum share of changed lines; A→B→A flapping (a hash seen before) never alerts.
+4. **Avoiding hammering a site?** Minimum 15 min interval, one fetch per URL per cycle, at least 5 s between requests to the same host, 2 concurrent jobs, and exponential backoff after errors/blocks.
+
+## Not included
+Keyword-only alerts, number charts, AI summaries, browser extension, daily digest. Add authentication before exposing the app publicly.

@@ -1,173 +1,100 @@
-const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
-const crypto = require("crypto");
+// Website Change Detector: Express API + scheduler/queue + Playwright worker + SQLite
+const express=require('express'),Database=require('better-sqlite3'),{chromium}=require('playwright'),crypto=require('crypto'),fs=require('fs'),dns=require('dns').promises;
+const Diff=require('diff'),{PNG}=require('pngjs'),pixelmatch=require('pixelmatch');
+const PORT=process.env.PORT||3000,BASE=process.env.BASE_URL||`http://localhost:${PORT}`,TG=process.env.TELEGRAM_BOT_TOKEN;
+const mailer=process.env.SMTP_URL?require('nodemailer').createTransport(process.env.SMTP_URL):null;
+const DATA=process.env.DATA_DIR||'./data',SH=DATA+'/shots';fs.mkdirSync(SH,{recursive:true});
+const db=new Database(DATA+'/app.db');
+db.exec(`create table if not exists watches(id integer primary key,name,url,interval_min int,watch_sel default '',ignore_sel default '',sensitivity default 'medium',notify default '',email default '',
+ status default 'pending',error,last_checked int,last_changed int,last_hash,fail_count int default 0,next_run int default 0);
+create table if not exists snapshots(id integer primary key,watch_id int,hash,text,created_at int);
+create index if not exists s_w on snapshots(watch_id,id)`);
+const sleep=ms=>new Promise(r=>setTimeout(r,ms)),sha=s=>crypto.createHash('sha256').update(s).digest('hex');
+const post=(u,b)=>fetch(u,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}).catch(()=>{});
 
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
-const PORT = process.env.PORT || 3000;
-app.use(express.static("public"));
+// ---- safety: public http(s) pages only (blocks SSRF to private networks)
+async function safeUrl(u){const x=new URL(u);if(!/^https?:$/.test(x.protocol))throw Error('Only http(s) URLs');
+ const {address}=await dns.lookup(x.hostname);
+ if(/^(10\.|127\.|0\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|::1|f[cd])/i.test(address))throw Error('Private addresses are not allowed');return x}
 
-const rooms = new Map();
-const now = () => Date.now();
-const roomCode = () => crypto.randomBytes(3).toString("hex").toUpperCase();
+// ---- noise filtering: timestamps, dates, relative times, counters, random tokens
+const NOISE=[/\b\d{1,2}[:.]\d{2}(:\d{2})?\s?(am|pm)?\b/gi,/\b\d{4}-\d{2}-\d{2}(t[\d:.]+z?)?\b/gi,/\b\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}\b/g,
+ /\b(just now|\d+\s*(seconds?|minutes?|mins?|hours?|days?)\s+ago)\b/gi,/\b[a-f0-9]{16,}\b/gi,/\b[\w+\/-]{24,}={0,2}/g,
+ /\b\d[\d,.]*\s*(views?|visitors?|users?|online|likes?|comments?|shares?|reads?)\b/gi];
+const normalize=(t,sens)=>t.split('\n').map(l=>{for(const r of NOISE)l=l.replace(r,'');if(sens==='low')l=l.replace(/\d+/g,'');return l.replace(/\s+/g,' ').trim()}).filter(Boolean).join('\n');
 
-function safeRoom(code) {
-  return String(code || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
-}
-function publicRoom(room) {
-  return {
-    code: room.code, hostId: room.hostId, hostName: room.hostName,
-    title: room.title, videoUrl: room.videoUrl, playing: room.playing,
-    position: room.position, updatedAt: room.updatedAt,
-    playlist: room.playlist, poll: room.poll,
-    users: [...room.users.values()].map(u => ({ id: u.id, name: u.name }))
-  };
-}
-function emitRoom(room) {
-  io.to(room.code).emit("room:update", publicRoom(room));
-}
-function getRoom(code) { return rooms.get(safeRoom(code)); }
+// ---- browser worker
+let browser;const getBrowser=async()=>browser?.isConnected()?browser:(browser=await chromium.launch({args:['--no-sandbox']}));
+const last={};async function throttle(host){const t=Math.max(Date.now(),(last[host]||0)+5000);last[host]=t;await sleep(t-Date.now())} // >=5s between hits per host
+const extract=(page,w)=>page.evaluate(({watch,ignore})=>{
+ const bad=[...ignore.split('||').filter(Boolean),'script','style','noscript','iframe','[class*=advert]','[id*=advert]','[class*=banner]','[class*=carousel]','ins.adsbygoogle'];
+ const hid=[];for(const s of bad){try{document.querySelectorAll(s).forEach(e=>{hid.push([e,e.style.display]);e.style.display='none'})}catch{}}
+ const roots=watch?watch.split('||').flatMap(s=>{try{return[...document.querySelectorAll(s)]}catch{return[]}}):[document.body];
+ const t=roots.map(e=>e.innerText).join('\n');hid.forEach(([e,d])=>e.style.display=d);return t},{watch:w.watch_sel,ignore:w.ignore_sel});
+const BLOCK=/captcha|are you a robot|verify you are human|unusual traffic|access denied|checking your browser/i;
 
-io.on("connection", socket => {
-  socket.on("room:create", ({ name } = {}, done = () => {}) => {
-    let code = roomCode();
-    while (rooms.has(code)) code = roomCode();
-    const cleanName = String(name || "Guest").trim().slice(0, 24) || "Guest";
-    const room = {
-      code, hostId: socket.id, hostName: cleanName, title: "Nothing playing yet",
-      videoUrl: "", playing: false, position: 0, updatedAt: now(),
-      users: new Map(), playlist: [], poll: null
-    };
-    room.users.set(socket.id, { id: socket.id, name: cleanName });
-    rooms.set(code, room);
-    socket.join(code);
-    done({ ok: true, room: publicRoom(room) });
-    emitRoom(room);
-  });
+function done(w,status,err){const f=status==='ok'?0:w.fail_count+1;
+ db.prepare('update watches set status=?,error=?,last_checked=?,fail_count=?,next_run=? where id=?').run(status,err||null,Date.now(),f,Date.now()+w.interval_min*6e4*2**Math.min(Math.max(f-1,0),4),w.id)}
 
-  socket.on("room:join", ({ code, name } = {}, done = () => {}) => {
-    const room = getRoom(code);
-    if (!room) return done({ ok: false, error: "Room not found. Check the code and try again." });
-    const cleanName = String(name || "Guest").trim().slice(0, 24) || "Guest";
-    room.users.set(socket.id, { id: socket.id, name: cleanName });
-    socket.join(room.code);
-    socket.emit("room:state", publicRoom(room));
-    socket.to(room.code).emit("chat:system", `${cleanName} joined the room`);
-    emitRoom(room);
-    done({ ok: true, room: publicRoom(room) });
-  });
+// One page load serves every watch of the same URL (200 watchers => 1 fetch)
+async function runUrl(url,ws){let ctx;
+ try{await throttle(new URL(url).host);await safeUrl(url);ctx=await(await getBrowser()).newContext({viewport:{width:1280,height:800}});const page=await ctx.newPage();let resp;
+  for(let i=0;i<3;i++){try{resp=await page.goto(url,{timeout:30000,waitUntil:'load'});break}catch(e){if(i==2)throw e;await sleep(2000*2**i)}} // retries w/ backoff
+  await page.waitForTimeout(1500);const st=resp?.status()||0,body=(await page.innerText('body').catch(()=>'')).slice(0,3000);
+  // Outage / CAPTCHA / bot-wall = status, NOT a content change
+  if([403,429].includes(st)||(body.length<2500&&BLOCK.test(body)))return ws.forEach(w=>done(w,'blocked','Blocked or CAPTCHA (HTTP '+st+')'));
+  if(st>=400)return ws.forEach(w=>done(w,'error','HTTP '+st));
+  const shot=await page.screenshot({fullPage:true});
+  for(const w of ws)await record(w,normalize(await extract(page,w),w.sensitivity),shot);
+ }catch(e){ws.forEach(w=>done(w,'error',e.message))}finally{await ctx?.close().catch(()=>{})}}
 
-  socket.on("playback:command", ({ code, action, position, videoUrl, title } = {}) => {
-    const room = getRoom(code);
-    if (!room || room.hostId !== socket.id) return;
-    if (typeof videoUrl === "string") room.videoUrl = videoUrl.trim().slice(0, 1500);
-    if (typeof title === "string") room.title = title.trim().slice(0, 120) || "Untitled video";
-    if (Number.isFinite(position)) room.position = Math.max(0, position);
-    if (action === "play") room.playing = true;
-    if (action === "pause" || action === "load" || action === "seek") room.playing = false;
-    room.updatedAt = now();
-    io.to(room.code).emit("playback:sync", {
-      action, position: room.position, videoUrl: room.videoUrl, title: room.title,
-      playing: room.playing, updatedAt: room.updatedAt, by: socket.id
-    });
-    emitRoom(room);
-  });
+async function record(w,text,shot){const hash=sha(text);done(w,'ok');if(hash===w.last_hash)return; // store only when hash changes
+ const prev=db.prepare('select text from snapshots where watch_id=? order by id desc limit 1').get(w.id),prevId=db.prepare('select max(id) m from snapshots where watch_id=?').get(w.id).m;
+ const seen=db.prepare('select 1 from snapshots where watch_id=? and hash=?').get(w.id,hash);
+ const id=db.prepare('insert into snapshots(watch_id,hash,text,created_at) values(?,?,?,?)').run(w.id,hash,text,Date.now()).lastInsertRowid;
+ fs.writeFileSync(`${SH}/${id}.png`,shot);db.prepare('update watches set last_hash=?,last_changed=? where id=?').run(hash,Date.now(),w.id);
+ if(!prev)return;const parts=Diff.diffLines(prev.text,text),ch=parts.filter(p=>p.added||p.removed).reduce((n,p)=>n+p.count,0);
+ const total=Math.max(prev.text.split('\n').length,text.split('\n').length);
+ // no endless alerts: skip A->B->A flapping (hash seen before) and changes below the sensitivity threshold
+ if(seen||ch/total<{low:.1,medium:.02,high:0}[w.sensitivity])return;
+ const added=parts.filter(p=>p.added).map(p=>p.value.trim()).join(' / ').slice(0,200);
+ notify(w,`${ch} line(s) changed. ${added?'New: '+added:''}`,`${BASE}/#/w/${w.id}/${prevId}/${id}`)}
 
-  socket.on("playback:heartbeat", ({ code, position, playing } = {}) => {
-    const room = getRoom(code);
-    if (!room || room.hostId !== socket.id || !Number.isFinite(position)) return;
-    room.position = Math.max(0, position);
-    room.playing = !!playing;
-    room.updatedAt = now();
-  });
+async function notify(w,summary,link){const msg=`🔔 ${w.name} changed\n${summary}\n${link}`;
+ if(/^https:\/\/discord/.test(w.notify))post(w.notify,{content:msg});
+ else if(/^tg:/.test(w.notify)&&TG)post(`https://api.telegram.org/bot${TG}/sendMessage`,{chat_id:w.notify.slice(3),text:msg});
+ else if(/^https?:/.test(w.notify))post(w.notify,{text:msg});
+ if(w.email&&mailer)mailer.sendMail({from:process.env.MAIL_FROM,to:w.email,subject:`Changed: ${w.name}`,text:msg}).catch(()=>{})}
 
-  socket.on("chat:send", ({ code, message } = {}) => {
-    const room = getRoom(code);
-    if (!room || !room.users.has(socket.id)) return;
-    const text = String(message || "").trim().slice(0, 500);
-    if (!text) return;
-    io.to(room.code).emit("chat:message", {
-      id: crypto.randomUUID(), name: room.users.get(socket.id).name,
-      text, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    });
-  });
+// ---- scheduler + job queue (2 concurrent jobs, 90s job timeout)
+let busy=false;async function tick(){if(busy)return;busy=true;
+ try{const g={};db.prepare('select * from watches where next_run<=?').all(Date.now()).forEach(w=>(g[w.url]??=[]).push(w));const q=Object.entries(g);
+  await Promise.all([0,1].map(async()=>{while(q.length){const[u,ws]=q.shift();await Promise.race([runUrl(u,ws),sleep(9e4)])}}))}finally{busy=false}}
+setInterval(tick,15000);
 
-  socket.on("reaction:send", ({ code, emoji } = {}) => {
-    const room = getRoom(code);
-    if (!room || !room.users.has(socket.id)) return;
-    const allowed = ["😂", "😍", "👏", "😮", "🔥", "😭", "❤️"];
-    if (!allowed.includes(emoji)) return;
-    io.to(room.code).emit("reaction:show", { emoji, name: room.users.get(socket.id).name });
-  });
-
-  socket.on("playlist:add", ({ code, title, url } = {}) => {
-    const room = getRoom(code);
-    if (!room || !room.users.has(socket.id)) return;
-    title = String(title || "").trim().slice(0, 120);
-    url = String(url || "").trim().slice(0, 1500);
-    if (!title || !url) return;
-    room.playlist.push({ id: crypto.randomUUID(), title, url, addedBy: room.users.get(socket.id).name });
-    emitRoom(room);
-  });
-  socket.on("playlist:play", ({ code, id } = {}) => {
-    const room = getRoom(code);
-    if (!room || room.hostId !== socket.id) return;
-    const item = room.playlist.find(x => x.id === id);
-    if (!item) return;
-    room.videoUrl = item.url; room.title = item.title; room.position = 0;
-    room.playing = false; room.updatedAt = now();
-    io.to(room.code).emit("playback:sync", {
-      action: "load", position: 0, videoUrl: room.videoUrl, title: room.title,
-      playing: false, updatedAt: room.updatedAt, by: socket.id
-    });
-    emitRoom(room);
-  });
-
-  socket.on("poll:create", ({ code, question, options } = {}) => {
-    const room = getRoom(code);
-    if (!room || room.hostId !== socket.id) return;
-    const opts = (Array.isArray(options) ? options : []).map(x => String(x).trim().slice(0, 60)).filter(Boolean).slice(0, 4);
-    if (!String(question || "").trim() || opts.length < 2) return;
-    room.poll = { id: crypto.randomUUID(), question: String(question).trim().slice(0, 160),
-      options: opts.map((label, i) => ({ label, votes: 0, voters: [] })) };
-    emitRoom(room);
-  });
-  socket.on("poll:vote", ({ code, index } = {}) => {
-    const room = getRoom(code);
-    if (!room || !room.poll || !room.users.has(socket.id)) return;
-    room.poll.options.forEach(o => { o.voters = o.voters.filter(id => id !== socket.id); });
-    const option = room.poll.options[index];
-    if (option) { option.voters.push(socket.id); option.votes = option.voters.length; }
-    emitRoom(room);
-  });
-
-  socket.on("host:transfer", ({ code, userId } = {}) => {
-    const room = getRoom(code);
-    if (!room || room.hostId !== socket.id || !room.users.has(userId)) return;
-    room.hostId = userId;
-    room.hostName = room.users.get(userId).name;
-    io.to(room.code).emit("chat:system", `${room.hostName} is now the host`);
-    emitRoom(room);
-  });
-
-  socket.on("disconnect", () => {
-    for (const room of rooms.values()) {
-      if (!room.users.has(socket.id)) continue;
-      const name = room.users.get(socket.id).name;
-      room.users.delete(socket.id);
-      if (room.hostId === socket.id) {
-        const next = room.users.values().next().value;
-        if (next) { room.hostId = next.id; room.hostName = next.name; }
-      }
-      if (room.users.size === 0) rooms.delete(room.code);
-      else {
-        io.to(room.code).emit("chat:system", `${name} left the room`);
-        emitRoom(room);
-      }
-    }
-  });
-});
-
-server.listen(PORT, () => console.log(`Watch Party running at http://localhost:${PORT}`));
+// ---- API
+const app=express();app.use(express.json(),express.static(__dirname+'/public'));
+const wrap=f=>(q,s)=>Promise.resolve(f(q,s)).catch(e=>s.status(400).json({error:e.message}));
+app.get('/api/watches',(q,s)=>s.json(db.prepare('select * from watches order by id desc').all()));
+app.post('/api/watches',wrap(async(q,s)=>{const b=q.body;await safeUrl(b.url);const iv=Math.min(1440,Math.max(15,+b.interval_min||60));
+ if(!b.name)throw Error('Name required');const r=db.prepare('insert into watches(name,url,interval_min,watch_sel,ignore_sel,sensitivity,notify,email) values(?,?,?,?,?,?,?,?)')
+ .run(b.name,b.url,iv,b.watch_sel||'',b.ignore_sel||'',['low','medium','high'].includes(b.sensitivity)?b.sensitivity:'medium',b.notify||'',b.email||'');s.json({id:r.lastInsertRowid})}));
+app.delete('/api/watches/:id',(q,s)=>{db.prepare('delete from watches where id=?').run(q.params.id);db.prepare('delete from snapshots where watch_id=?').run(q.params.id);s.json({ok:1})});
+app.post('/api/watches/:id/check',(q,s)=>{db.prepare('update watches set next_run=0 where id=?').run(q.params.id);tick();s.json({ok:1})});
+app.get('/api/watches/:id/snapshots',(q,s)=>s.json(db.prepare('select id,created_at,length(text) len from snapshots where watch_id=? order by id desc').all(q.params.id)));
+app.get('/api/diff',(q,s)=>{const g=i=>db.prepare('select text from snapshots where id=?').get(i)?.text||'';s.json(Diff.diffLines(g(q.query.a),g(q.query.b)))});
+app.get('/api/shot/:id',(q,s)=>s.sendFile(require('path').resolve(`${SH}/${+q.params.id}.png`)));
+app.get('/api/imgdiff',(q,s)=>{const rd=i=>PNG.sync.read(fs.readFileSync(`${SH}/${+i}.png`)),A=rd(q.query.a),B=rd(q.query.b),w=Math.min(A.width,B.width),h=Math.min(A.height,B.height);
+ const crop=P=>{const o=new PNG({width:w,height:h});PNG.bitblt(P,o,0,0,w,h,0,0);return o},out=new PNG({width:w,height:h});
+ pixelmatch(crop(A).data,crop(B).data,out.data,w,h,{threshold:.15});s.type('png').send(PNG.sync.write(out))}); // changed pixels highlighted red
+app.get('/api/watches/:id/rss',(q,s)=>{const w=db.prepare('select * from watches where id=?').get(q.params.id);if(!w)return s.sendStatus(404);
+ const it=db.prepare('select id,created_at from snapshots where watch_id=? order by id desc limit 30').all(w.id).map(x=>`<item><title>${w.name} changed</title><link>${BASE}/#/w/${w.id}</link><guid>${x.id}</guid><pubDate>${new Date(x.created_at).toUTCString()}</pubDate></item>`).join('');
+ s.type('xml').send(`<?xml version="1.0"?><rss version="2.0"><channel><title>${w.name}</title><link>${BASE}</link><description>${w.url}</description>${it}</channel></rss>`)});
+// visual picker backend: screenshot of the page, and click (x,y) -> CSS selector
+app.get('/api/preview',wrap(async(q,s)=>{await safeUrl(q.query.url);const c=await(await getBrowser()).newContext({viewport:{width:1280,height:800}}),p=await c.newPage();
+ try{await p.goto(q.query.url,{timeout:30000});await p.waitForTimeout(1500);s.type('png').send(await p.screenshot())}finally{await c.close()}}));
+app.post('/api/pick',wrap(async(q,s)=>{await safeUrl(q.body.url);const c=await(await getBrowser()).newContext({viewport:{width:1280,height:800}}),p=await c.newPage();
+ try{await p.goto(q.body.url,{timeout:30000});await p.waitForTimeout(1500);
+  s.json({selector:await p.evaluate(([x,y])=>{let e=document.elementFromPoint(x,y);const o=[];while(e&&e.nodeType==1&&e!==document.body){let t=e.tagName.toLowerCase();
+   if(e.id){o.unshift('#'+CSS.escape(e.id));break}const sib=[...e.parentNode.children].filter(c=>c.tagName==e.tagName);if(sib.length>1)t+=`:nth-of-type(${sib.indexOf(e)+1})`;o.unshift(t);e=e.parentNode}return o.join(' > ')},[+q.body.x,+q.body.y])})}finally{await c.close()}}));
+app.listen(PORT,()=>{console.log('Listening on',PORT);tick()});
