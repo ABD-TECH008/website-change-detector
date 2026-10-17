@@ -1,19 +1,43 @@
 <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Change Detector</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#f3f5f7;--ink:#17202a;--mute:#5d6b79;--line:#d5dbe1;--ok:#13795b;--err:#b42318;--blk:#a15c07;--acc:#1d4ed8}
-*{box-sizing:border-box}body{margin:0;font:15px/1.5 "Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--ink)}
-header{padding:18px 24px;border-bottom:1px solid var(--line);background:#fff}header a{font-size:22px;font-weight:700;color:var(--ink);text-decoration:none}
-main{max-width:1100px;margin:0 auto;padding:24px}h2{margin:0 0 12px;font-size:18px}
-section{background:#fff;border:1px solid var(--line);padding:18px;margin-bottom:20px}
-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}label{display:flex;flex-direction:column;font-size:13px;color:var(--mute);gap:4px}
-input,select,textarea,button{font:inherit;padding:8px;border:1px solid var(--line);background:#fff;color:var(--ink)}button{cursor:pointer;background:var(--ink);color:#fff;border-color:var(--ink)}
-button.ghost{background:#fff;color:var(--ink)}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
-.wide{grid-column:1/-1}.tw{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
-.pill{padding:2px 10px;border:1px solid;font-size:13px}.ok{color:var(--ok)}.error{color:var(--err)}.blocked{color:var(--blk)}.pending{color:var(--mute)}
-#pv{max-width:100%;border:1px solid var(--line);cursor:crosshair;display:block;margin-top:8px}
-pre{margin:0;padding:12px;background:#fafbfc;border:1px solid var(--line);white-space:pre-wrap;word-break:break-word;max-height:420px;overflow:auto}
-.add{background:#dcfce7}.rem{background:#fee2e2;text-decoration:line-through}.cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}.cols img,#dimg{max-width:100%;border:1px solid var(--line)}
-.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}small{color:var(--mute)}@media(max-width:700px){.cols{grid-template-columns:1fr}}
+:root{--bg:#0b1020;--panel:#131a30;--line:#25304f;--ink:#e8ecf8;--mute:#8d99b8;--acc:#22d3ee;--acc2:#a78bfa;--ok:#34d399;--err:#f87171;--blk:#fbbf24}
+*{box-sizing:border-box}
+html{cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28'%3E%3Ccircle cx='14' cy='14' r='7' fill='none' stroke='%2322d3ee' stroke-width='2'/%3E%3Ccircle cx='14' cy='14' r='2' fill='%2322d3ee'/%3E%3C/svg%3E") 14 14,auto}
+body{margin:0;font:15px/1.55 "DM Sans",system-ui,sans-serif;color:var(--ink);min-height:100vh;
+ background:radial-gradient(900px 500px at 85% -10%,rgba(167,139,250,.22),transparent),radial-gradient(800px 500px at -10% 10%,rgba(34,211,238,.16),transparent),var(--bg)}
+header{padding:18px 28px;border-bottom:1px solid var(--line);background:rgba(11,16,32,.7);backdrop-filter:blur(8px);position:sticky;top:0;z-index:5}
+header a{font:700 24px "Space Grotesk",sans-serif;text-decoration:none;background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+main{max-width:1100px;margin:0 auto;padding:28px 20px}
+h2{margin:0 0 14px;font:700 19px "Space Grotesk",sans-serif}
+section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:22px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+a{color:var(--acc)}
+form{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+label{display:flex;flex-direction:column;font-size:13px;color:var(--mute);gap:5px}
+input,select,textarea{font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#0d1328;color:var(--ink);transition:border-color .2s,box-shadow .2s}
+input:hover,select:hover,textarea:hover{border-color:#3a4a78}
+input:focus-visible,select:focus-visible,textarea:focus-visible{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px rgba(34,211,238,.2)}
+button{font:500 14px "DM Sans",sans-serif;padding:10px 18px;border:0;border-radius:10px;cursor:pointer;color:#06111f;background:linear-gradient(90deg,var(--acc),var(--acc2));transition:transform .15s,box-shadow .2s}
+button:hover{transform:translateY(-2px);box-shadow:0 8px 20px rgba(34,211,238,.3)}
+button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button.ghost:hover{border-color:var(--acc);box-shadow:none}
+button:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.wide{grid-column:1/-1}.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{font-weight:500;color:var(--mute);font-size:13px}
+th,td{text-align:left;padding:12px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+tr:hover td{background:rgba(34,211,238,.04)}
+.pill{padding:3px 12px;border:1px solid currentColor;border-radius:999px;font-size:13px;font-weight:500}
+.ok{color:var(--ok)}.error{color:var(--err)}.blocked{color:var(--blk)}.pending{color:var(--mute)}
+#pv{max-width:100%;border:1px solid var(--line);border-radius:10px;cursor:crosshair;display:block;margin-top:10px}
+pre{margin:0;padding:14px;background:#0d1328;border:1px solid var(--line);border-radius:10px;white-space:pre-wrap;word-break:break-word;max-height:420px;overflow:auto}
+.add{background:rgba(52,211,153,.2);color:#a7f3d0}.rem{background:rgba(248,113,113,.2);color:#fecaca;text-decoration:line-through}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}.cols img,#dimg{max-width:100%;border:1px solid var(--line);border-radius:10px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+small{color:var(--mute)}
+button,select,a,summary{cursor:pointer}
+@media(max-width:700px){.cols{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 <header><a href="#/">Change Detector</a></header><main id="app"></main>
 <script>
